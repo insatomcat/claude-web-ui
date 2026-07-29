@@ -6,7 +6,7 @@
 
 html,
 body,
-#root {
+#app {
   height: 100%;
   margin: 0;
 }
@@ -211,7 +211,6 @@ body {
   flex-shrink: 0;
 }
 
-/* Session */
 .app.session {
   height: 100%;
   max-height: 100dvh;
@@ -329,4 +328,8 @@ body {
 .xterm-viewport {
   overflow-y: auto !important;
   -webkit-overflow-scrolling: touch;
+}
+
+.hidden {
+  display: none !important;
 }

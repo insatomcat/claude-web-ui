@@ -9,13 +9,21 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="theme-color" content="#0f1117" />
     <title>Claude Web UI</title>
+    <style>
+      html {
+        background: #0f1117;
+        color: #e6edf3;
+      }
+      html:not(.app-ready) #app {
+        visibility: hidden;
+      }
+    </style>
+    <base id="app-base" href="./" />
     <script>
       (function () {
         var path = location.pathname;
         if (!path.endsWith("/")) path += "/";
-        var base = document.createElement("base");
-        base.href = path;
-        document.head.appendChild(base);
+        document.getElementById("app-base").href = path;
       })();
     </script>
     <link rel="stylesheet" href="static/styles.css" />

@@ -436,4 +436,30 @@ async function initPick() {
   renderPick(state);
 }
 
-initPick();
+async function whenStylesReady() {
+  const links = Array.from(document.querySelectorAll('link[rel="stylesheet"]'));
+  await Promise.all(
+    links.map(
+      (link) =>
+        new Promise((resolve) => {
+          if (link.sheet) {
+            resolve();
+            return;
+          }
+          link.addEventListener("load", resolve, { once: true });
+          link.addEventListener("error", resolve, { once: true });
+        }),
+    ),
+  );
+}
+
+async function boot() {
+  if (document.readyState === "loading") {
+    await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
+  }
+  await whenStylesReady();
+  document.documentElement.classList.add("app-ready");
+  await initPick();
+}
+
+boot();

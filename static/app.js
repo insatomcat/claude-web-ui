@@ -43,15 +43,29 @@ function pushRecent(path) {
   localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
 }
 
+/** Resolve path relative to current app base (reverse proxy subpath). */
+function appUrl(path) {
+  return new URL(String(path).replace(/^\//, ""), document.baseURI);
+}
+
+function wsTerminalUrl(query) {
+  const u = appUrl("ws/terminal");
+  u.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  Object.entries(query).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+  return u.href;
+}
+
 async function fetchRoots() {
-  const r = await fetch("/api/roots");
+  const r = await fetch(appUrl("api/roots"));
   if (!r.ok) throw new Error("roots");
   const j = await r.json();
   return j.roots;
 }
 
 async function fetchFolders(root) {
-  const r = await fetch(`/api/folders?root=${encodeURIComponent(root)}`);
+  const u = appUrl("api/folders");
+  u.searchParams.set("root", root);
+  const r = await fetch(u);
   if (!r.ok) throw new Error("folders");
   return r.json();
 }
@@ -342,9 +356,12 @@ function renderSession(cwd) {
   term.open(termHost);
   fit.fit();
 
-  const proto = window.location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(
-    `${proto}://${window.location.host}/ws/terminal?cwd=${encodeURIComponent(cwd)}&cols=${term.cols}&rows=${term.rows}`,
+    wsTerminalUrl({
+      cwd,
+      cols: term.cols,
+      rows: term.rows,
+    }),
   );
 
   const send = (data) => {

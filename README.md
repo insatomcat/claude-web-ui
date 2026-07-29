@@ -51,6 +51,20 @@ Seuls les chemins **sous** `WORKSPACE_ROOTS` sont autorisés.
 ## nginx (exemple)
 
 ```nginx
+# Exemple sous-chemin https://host/claude/ (URLs relatives côté navigateur)
+location /claude/ {
+    proxy_pass http://127.0.0.1:3847/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_read_timeout 86400;
+}
+```
+
+Ou à la racine du vhost :
+
+```nginx
 location / {
     proxy_pass http://127.0.0.1:3847;
     proxy_http_version 1.1;

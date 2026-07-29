@@ -8,6 +8,7 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="theme-color" content="#0f1117" />
+    <meta name="app-base-path" id="meta-app-base" content="%%APP_BASE_PATH%%" />
     <title>Claude Web UI</title>
     <style>
       html {
@@ -18,9 +19,15 @@
         visibility: hidden;
       }
     </style>
-    <base id="app-base" href="./" />
+    <base id="app-base" href="%%APP_BASE_HREF%%" />
     <script>
       (function () {
+        var meta = document.getElementById("meta-app-base");
+        var fromServer = meta && meta.getAttribute("content");
+        if (fromServer) {
+          document.getElementById("app-base").href = fromServer.replace(/\/?$/, "/");
+          return;
+        }
         var path = location.pathname;
         if (!path.endsWith("/")) path += "/";
         document.getElementById("app-base").href = path;

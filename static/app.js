@@ -43,16 +43,61 @@ function pushRecent(path) {
   localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
 }
 
-/** Resolve path relative to current app base (reverse proxy subpath). */
+/** @type {string} Public mount path without trailing slash, e.g. "/claude" or "". */
+let appBasePath = "";
+
+function guessBaseFromLocation() {
+  let p = location.pathname;
+  if (!p || p === "/") return "";
+  if (!p.endsWith("/")) return p;
+  return p.replace(/\/$/, "") || "";
+}
+
+function readInitialBasePath() {
+  const meta = document.getElementById("meta-app-base");
+  const fromMeta = meta?.getAttribute("content")?.trim();
+  if (fromMeta) return fromMeta.replace(/\/$/, "");
+  return guessBaseFromLocation();
+}
+
+function applyBaseHref(basePath) {
+  const href = basePath ? `${basePath.replace(/\/$/, "")}/` : "/";
+  const base = document.getElementById("app-base");
+  if (base) base.setAttribute("href", href);
+}
+
+function mountOrigin(basePath) {
+  if (!basePath) return `${location.origin}/`;
+  const segment = basePath.startsWith("/") ? basePath : `/${basePath}`;
+  return `${location.origin}${segment.endsWith("/") ? segment : `${segment}/`}`;
+}
+
+/** Resolve path relative to the app mount (reverse proxy subpath). */
 function appUrl(path) {
-  return new URL(String(path).replace(/^\//, ""), document.baseURI);
+  return new URL(String(path).replace(/^\//, ""), mountOrigin(appBasePath));
 }
 
 function wsTerminalUrl(query) {
   const u = appUrl("ws/terminal");
-  u.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  u.protocol = location.protocol === "https:" ? "wss:" : "ws:";
   Object.entries(query).forEach(([k, v]) => u.searchParams.set(k, String(v)));
-  return u.href;
+  return u.toString();
+}
+
+async function loadAppConfig() {
+  appBasePath = readInitialBasePath();
+  applyBaseHref(appBasePath);
+  try {
+    const r = await fetch(appUrl("api/config"));
+    if (!r.ok) return;
+    const j = await r.json();
+    if (typeof j.basePath === "string") {
+      appBasePath = j.basePath.replace(/\/$/, "");
+      applyBaseHref(appBasePath);
+    }
+  } catch {
+    /* keep guessed base */
+  }
 }
 
 async function fetchRoots() {
@@ -458,6 +503,7 @@ async function boot() {
     await new Promise((r) => document.addEventListener("DOMContentLoaded", r, { once: true }));
   }
   await whenStylesReady();
+  await loadAppConfig();
   document.documentElement.classList.add("app-ready");
   await initPick();
 }

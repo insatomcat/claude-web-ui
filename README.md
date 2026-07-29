@@ -45,22 +45,33 @@ Variables lues depuis `.env` (via `python-dotenv` au démarrage).
 | `WORKSPACE_ROOTS` | `~/dev` | Racines listées (chemins absolus, séparés par `,`) |
 | `CLAUDE_COMMAND` | `claude` | Commande lancée à l'ouverture d'une session |
 | `USE_LOGIN_SHELL` | `true` | Passe par `bash -lc` (`.profile`, nvm, etc.) |
+| `ROOT_PATH` | *(vide)* | Préfixe public (`/claude`) pour API/WS côté navigateur |
+| `MOUNT_AT_ROOT_PATH` | `false` | Monter l'app FastAPI sous `ROOT_PATH` (si nginx ne retire pas le préfixe) |
 
 Seuls les chemins **sous** `WORKSPACE_ROOTS` sont autorisés.
 
 ## nginx (exemple)
 
+Préfère retirer le préfixe côté upstream (`/` final sur `proxy_pass`) et définir `ROOT_PATH=/claude` dans `.env` :
+
 ```nginx
-# Exemple sous-chemin https://host/claude/ (URLs relatives côté navigateur)
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 location /claude/ {
     proxy_pass http://127.0.0.1:3847/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection $connection_upgrade;
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Prefix /claude;
     proxy_read_timeout 86400;
 }
 ```
+
+`X-Forwarded-Prefix` et `ROOT_PATH` permettent au front de cibler `wss://host/claude/ws/terminal` même quand uvicorn ne voit que `/ws/terminal`.
 
 Ou à la racine du vhost :
 

@@ -28,6 +28,7 @@ class Settings:
     use_login_shell: bool = os.getenv("USE_LOGIN_SHELL", "true").lower() != "false"
     root_path: str = _normalize_root_path(os.getenv("ROOT_PATH", ""))
     mount_at_root_path: bool = os.getenv("MOUNT_AT_ROOT_PATH", "false").lower() == "true"
+    ws_token_ttl: int = int(os.getenv("WS_TOKEN_TTL", "120"))
     workspace_roots: list[str]
 
     def __init__(self) -> None:

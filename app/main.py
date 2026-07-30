@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings, _normalize_root_path
 from app.paths import PathNotAllowedError, assert_path_under_roots, folder_meta, list_subfolders
 from app.terminal import handle_terminal_ws
+from app.ws_tokens import client_ip_from_headers, consume_ws_token, issue_ws_token
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -50,6 +51,15 @@ def folders(root: str | None = Query(default=None)) -> dict:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
 
+@api.get("/api/ws-token")
+def ws_token(request: Request) -> dict:
+    ip = client_ip_from_headers(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else None,
+    )
+    return {"token": issue_ws_token(ip)}
+
+
 @api.get("/api/folder")
 def folder(path: str = Query(...)) -> dict:
     try:
@@ -64,7 +74,16 @@ async def ws_terminal(
     cwd: str = Query(...),
     cols: int = Query(80),
     rows: int = Query(24),
+    token: str | None = Query(default=None),
 ) -> None:
+    ip = client_ip_from_headers(
+        websocket.headers.get("x-forwarded-for"),
+        websocket.client.host if websocket.client else None,
+    )
+    if not consume_ws_token(token, ip):
+        await websocket.close(code=4401, reason="Jeton WS invalide ou expiré")
+        return
+
     await websocket.accept()
     if not cwd:
         await websocket.send_json({"type": "error", "message": "cwd manquant"})

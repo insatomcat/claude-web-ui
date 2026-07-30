@@ -390,10 +390,10 @@ async function loadRoot(root, state) {
 function openSession(path, state) {
   pushRecent(path);
   state.recents = loadRecents();
-  renderSession(path);
+  void renderSession(path);
 }
 
-function renderSession(cwd) {
+async function renderSession(cwd) {
   termHandle = null;
   mount.innerHTML = "";
   const root = el("div", "app session");
@@ -550,11 +550,24 @@ function renderSession(cwd) {
     viewport.style.overflowY = "scroll";
   }
 
+  let token;
+  try {
+    const tokenRes = await fetch(appUrl("api/ws-token"), { credentials: "same-origin" });
+    if (!tokenRes.ok) throw new Error("token");
+    ({ token } = await tokenRes.json());
+  } catch {
+    overlay.classList.remove("hidden");
+    overlay.classList.add("error");
+    overlay.textContent = "Impossible d'obtenir un jeton de session (auth nginx ?)";
+    return;
+  }
+
   const ws = new WebSocket(
     wsTerminalUrl({
       cwd,
       cols: term.cols,
       rows: term.rows,
+      token,
     }),
   );
 

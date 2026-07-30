@@ -73,29 +73,42 @@ location /claude/ {
 
 `X-Forwarded-Prefix` et `ROOT_PATH` permettent au front de cibler `wss://host/claude/ws/terminal` même quand uvicorn ne voit que `/ws/terminal`.
 
-### Authentification nginx (éviter la double demande iPhone)
+### Authentification nginx + iPhone (Safari)
 
-Safari redemande souvent login/mot de passe à l'ouverture du **WebSocket** si `auth_basic` n'est pas configuré pour le relayer :
+Safari **ne renvoie pas** le login/mot de passe `auth_basic` sur les WebSockets. D'où la 2e popup à l'ouverture d'un projet.
+
+**Solution** : jeton éphémère côté app (`GET /api/ws-token`, protégé par `auth_basic`) + bloc nginx **`/claude/ws/` sans auth** (l'app valide le jeton).
 
 ```nginx
-location /claude/ {
-    auth_basic "Claude Web UI";
-    auth_basic_user_file /etc/nginx/.htpasswd;
-
-    proxy_pass http://127.0.0.1:3847/;
+# 1) WebSocket : SANS auth_basic (jeton validé par l'app, TTL 2 min)
+location /claude/ws/ {
+    proxy_pass http://127.0.0.1:3847/ws/;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 86400;
+}
+
+# 2) Tout le reste : auth_basic (HTML, API, static)
+location /claude/ {
+    auth_basic "Accès restreint";
+    auth_basic_user_file /etc/nginx/.htpasswdclaude;
+
+    proxy_pass http://127.0.0.1:3847/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Prefix /claude;
     proxy_read_timeout 86400;
 }
 ```
 
-Même `auth_basic`, même `location` pour HTML, API et WS. Pas de bloc séparé sans auth pour `/ws/`.
+Le bloc `/claude/ws/` doit être **au même niveau** que `/claude/` (souvent dans le même `server { }`). Pas besoin de `Authorization $http_authorization` sur le WS.
 
-Si Safari redemande quand même : préférer une auth par **cookie** (Authelia, oauth2-proxy) ou Tailscale sans `auth_basic` devant l'app.
+Dans `.env` : `ROOT_PATH=/claude`.
+
+Alternative long terme : auth par cookie (Authelia, oauth2-proxy) ou Tailscale sans `auth_basic`.
 
 Ou à la racine du vhost :
 

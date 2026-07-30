@@ -9,6 +9,8 @@ const MOBILE_KEYS = [
   { label: "Esc", seq: "\x1b" },
   { label: "Ctrl+C", seq: "\x03" },
   { label: "Ctrl+D", seq: "\x04" },
+  { label: "PgUp", seq: "\x1b[5~" },
+  { label: "PgDn", seq: "\x1b[6~" },
   { label: "↑", seq: "\x1b[A" },
   { label: "↓", seq: "\x1b[B" },
   { label: "←", seq: "\x1b[D" },
@@ -132,6 +134,59 @@ function sendToTerminal(text, appendNewline) {
   if (appendNewline) termHandle.sendLine(text);
   else termHandle.send(text);
   termHandle.focus();
+}
+
+function attachTouchScroll(host, terminal) {
+  let lastY = null;
+  host.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length === 1) lastY = e.touches[0].clientY;
+    },
+    { passive: true },
+  );
+  host.addEventListener(
+    "touchmove",
+    (e) => {
+      if (lastY == null || e.touches.length !== 1) return;
+      const y = e.touches[0].clientY;
+      const delta = y - lastY;
+      lastY = y;
+      if (Math.abs(delta) < 3) return;
+      const lines = Math.max(1, Math.round(Math.abs(delta) / 10));
+      terminal.scrollLines(delta > 0 ? -lines : lines);
+    },
+    { passive: true },
+  );
+  host.addEventListener(
+    "touchend",
+    () => {
+      lastY = null;
+    },
+    { passive: true },
+  );
+}
+
+function buildScrollBar() {
+  const bar = el("div", "term-scroll");
+  const buttons = [
+    { label: "▲", title: "Historique terminal" },
+    { label: "▼", title: "Vers le bas" },
+    { label: "⤒", title: "Début buffer" },
+    { label: "⤓", title: "Fin buffer" },
+    { label: "Pg↑", title: "Page up (Claude)" },
+    { label: "Pg↓", title: "Page down (Claude)" },
+  ];
+  for (const { label, title } of buttons) {
+    const b = el("button", "key-chip scroll-chip");
+    b.type = "button";
+    b.textContent = label;
+    b.title = title;
+    b.onmousedown = (e) => e.preventDefault();
+    b.ontouchstart = (e) => e.preventDefault();
+    bar.appendChild(b);
+  }
+  return bar;
 }
 
 function renderPick(state) {
@@ -282,6 +337,9 @@ function renderSession(cwd) {
   termWrap.append(overlay, termHost);
   root.appendChild(termWrap);
 
+  const scrollBar = buildScrollBar();
+  root.appendChild(scrollBar);
+
   const composer = el("div", "composer");
   const textarea = el("textarea", "composer-input");
   textarea.rows = 2;
@@ -394,12 +452,19 @@ function renderSession(cwd) {
       cursor: "#58a6ff",
       selectionBackground: "#264f78",
     },
-    scrollback: 5000,
+    scrollback: 10000,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(termHost);
   fit.fit();
+  attachTouchScroll(termHost, term);
+
+  const viewport = termHost.querySelector(".xterm-viewport");
+  if (viewport) {
+    viewport.style.touchAction = "pan-y";
+    viewport.style.overflowY = "scroll";
+  }
 
   const ws = new WebSocket(
     wsTerminalUrl({
@@ -414,6 +479,19 @@ function renderSession(cwd) {
       ws.send(JSON.stringify({ type: "input", data }));
     }
   };
+
+  scrollBar.querySelectorAll("button").forEach((btn, i) => {
+    const actions = [
+      () => term.scrollLines(-5),
+      () => term.scrollLines(5),
+      () => term.scrollToTop(),
+      () => term.scrollToBottom(),
+      () => send("\x1b[5~"),
+      () => send("\x1b[6~"),
+    ];
+    btn.onclick = () => actions[i]?.();
+  });
+
   termHandle = {
     send,
     sendLine: (line) => send(line.endsWith("\n") ? line : `${line}\r`),

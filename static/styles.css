@@ -243,11 +243,32 @@ body {
   min-height: 0;
   position: relative;
   background: #0f1117;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .terminal-host {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   padding: 4px;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.term-scroll {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  background: #161b22;
+  border-top: 1px solid #21262d;
+}
+
+.scroll-chip {
+  min-width: 2.4rem;
+  font-size: 0.85rem;
 }
 
 .terminal-overlay {
@@ -323,11 +344,18 @@ body {
 
 .xterm {
   height: 100%;
+  width: 100%;
 }
 
 .xterm-viewport {
-  overflow-y: auto !important;
+  overflow-y: scroll !important;
+  touch-action: pan-y !important;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.xterm-screen {
+  touch-action: pan-y;
 }
 
 .hidden {

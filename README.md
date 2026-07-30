@@ -11,7 +11,7 @@ L'exposition réseau et l'authentification restent **à ta charge** (nginx, Tail
 - Sélecteur de dossiers sous `WORKSPACE_ROOTS` (repos git avec branche)
 - Récents (localStorage navigateur)
 - Session terminal complète (PTY + vrai CLI `claude`)
-- Composer avec dictée vocale (Safari / Chrome)
+- Composer optionnel (masqué sur mobile ; bouton **Prompt**)
 - Barre de touches mobile (Tab, Ctrl+C, flèches…)
 - UI sombre, safe areas iPhone
 
@@ -72,6 +72,30 @@ location /claude/ {
 ```
 
 `X-Forwarded-Prefix` et `ROOT_PATH` permettent au front de cibler `wss://host/claude/ws/terminal` même quand uvicorn ne voit que `/ws/terminal`.
+
+### Authentification nginx (éviter la double demande iPhone)
+
+Safari redemande souvent login/mot de passe à l'ouverture du **WebSocket** si `auth_basic` n'est pas configuré pour le relayer :
+
+```nginx
+location /claude/ {
+    auth_basic "Claude Web UI";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    proxy_pass http://127.0.0.1:3847/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header X-Forwarded-Prefix /claude;
+    proxy_read_timeout 86400;
+}
+```
+
+Même `auth_basic`, même `location` pour HTML, API et WS. Pas de bloc séparé sans auth pour `/ws/`.
+
+Si Safari redemande quand même : préférer une auth par **cookie** (Authelia, oauth2-proxy) ou Tailscale sans `auth_basic` devant l'app.
 
 Ou à la racine du vhost :
 

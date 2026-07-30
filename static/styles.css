@@ -212,9 +212,20 @@ body {
 }
 
 .app.session {
-  height: 100%;
+  height: 100dvh;
   max-height: 100dvh;
   overflow: hidden;
+  padding-bottom: var(--keyboard-inset, 0px);
+}
+
+.app.session.keyboard-open .term-scroll,
+.app.session.keyboard-open .mobile-keys,
+.app.session.keyboard-open .composer {
+  display: none;
+}
+
+.composer.composer-hidden {
+  display: none;
 }
 
 .topbar {

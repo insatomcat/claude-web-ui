@@ -90,7 +90,7 @@ async function loadAppConfig() {
   appBasePath = readInitialBasePath();
   applyBaseHref(appBasePath);
   try {
-    const r = await fetch(appUrl("api/config"));
+    const r = await fetch(appUrl("api/config"), { credentials: "same-origin" });
     if (!r.ok) return;
     const j = await r.json();
     if (typeof j.basePath === "string") {
@@ -103,7 +103,7 @@ async function loadAppConfig() {
 }
 
 async function fetchRoots() {
-  const r = await fetch(appUrl("api/roots"));
+  const r = await fetch(appUrl("api/roots"), { credentials: "same-origin" });
   if (!r.ok) throw new Error("roots");
   const j = await r.json();
   return j.roots;
@@ -112,7 +112,7 @@ async function fetchRoots() {
 async function fetchFolders(root) {
   const u = appUrl("api/folders");
   u.searchParams.set("root", root);
-  const r = await fetch(u);
+  const r = await fetch(u, { credentials: "same-origin" });
   if (!r.ok) throw new Error("folders");
   return r.json();
 }
@@ -165,6 +165,96 @@ function attachTouchScroll(host, terminal) {
     },
     { passive: true },
   );
+}
+
+function isCoarsePointer() {
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+function attachKeyboardAwareSession(sessionRoot, term, fit, onResize) {
+  const vv = window.visualViewport;
+  if (!vv) return () => {};
+
+  const adjust = () => {
+    const gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    sessionRoot.style.setProperty("--keyboard-inset", `${gap}px`);
+    sessionRoot.classList.toggle("keyboard-open", gap > 40);
+    onResize();
+    term.scrollToBottom();
+  };
+
+  vv.addEventListener("resize", adjust);
+  vv.addEventListener("scroll", adjust);
+  term.textarea?.addEventListener("focus", () => setTimeout(adjust, 250));
+
+  return () => {
+    vv.removeEventListener("resize", adjust);
+    vv.removeEventListener("scroll", adjust);
+  };
+}
+
+function createSpeechComposer(textarea, micBtn, onListeningChange) {
+  const Speech = getSpeechRecognition();
+  if (!Speech || !micBtn) return null;
+
+  let recognition = null;
+  let listening = false;
+  let committed = "";
+  let interim = "";
+
+  const render = () => {
+    const merged = [committed.trim(), interim.trim()].filter(Boolean).join(" ");
+    textarea.value = merged;
+  };
+
+  const resetMic = () => {
+    listening = false;
+    interim = "";
+    recognition = null;
+    onListeningChange(false);
+    micBtn.classList.remove("active");
+    micBtn.textContent = "🎤";
+  };
+
+  const stop = () => {
+    try {
+      recognition?.stop();
+    } catch {
+      /* already stopped */
+    }
+    resetMic();
+  };
+
+  micBtn.onclick = () => {
+    if (listening) {
+      stop();
+      return;
+    }
+    committed = textarea.value.trim();
+    interim = "";
+    recognition = new Speech();
+    recognition.lang = navigator.language || "fr-FR";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.onresult = (ev) => {
+      interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const part = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) committed = `${committed} ${part}`.trim();
+        else interim = `${interim} ${part}`.trim();
+      }
+      render();
+    };
+    recognition.onerror = resetMic;
+    recognition.onend = resetMic;
+    recognition.start();
+    listening = true;
+    onListeningChange(true);
+    micBtn.classList.add("active");
+    micBtn.textContent = "⏹";
+  };
+
+  return { stop, render };
 }
 
 function buildScrollBar() {
@@ -308,26 +398,36 @@ function renderSession(cwd) {
   mount.innerHTML = "";
   const root = el("div", "app session");
   let termReady = false;
-  let showKeys = true;
-  /** @type {SpeechRecognition | null} */
-  let recognition = null;
-  let listening = false;
+  let showKeys = !isCoarsePointer();
+  let showComposer = !isCoarsePointer();
+  /** @type {{ stop: () => void } | null} */
+  let speech = null;
+  let detachKeyboard = () => {};
 
   const topbar = el("header", "topbar");
   const back = el("button", "btn ghost");
   back.type = "button";
   back.textContent = "← Projets";
-  back.onclick = () => initPick();
+  back.onclick = () => {
+    detachKeyboard();
+    speech?.stop();
+    initPick();
+  };
 
   const title = el("div", "topbar-title");
   title.title = cwd;
   title.textContent = basename(cwd);
 
+  const toggleComposer = el("button", "btn ghost");
+  toggleComposer.type = "button";
+  toggleComposer.textContent = "Prompt";
+  toggleComposer.hidden = !isCoarsePointer();
+
   const toggleKeys = el("button", "btn ghost");
   toggleKeys.type = "button";
   toggleKeys.textContent = "Clavier";
 
-  topbar.append(back, title, toggleKeys);
+  topbar.append(back, title, toggleComposer, toggleKeys);
   root.appendChild(topbar);
 
   const termWrap = el("div", "terminal-wrap");
@@ -341,48 +441,24 @@ function renderSession(cwd) {
   root.appendChild(scrollBar);
 
   const composer = el("div", "composer");
+  if (!showComposer) composer.classList.add("composer-hidden");
+
   const textarea = el("textarea", "composer-input");
   textarea.rows = 2;
-  textarea.placeholder = "Prompt (ou dictée micro)…";
+  textarea.placeholder = "Prompt alternatif (dictée)…";
   textarea.disabled = true;
 
   const actions = el("div", "composer-actions");
-  const Speech = getSpeechRecognition();
   let micBtn = null;
-  if (Speech) {
+  if (getSpeechRecognition()) {
     micBtn = el("button", "btn icon");
     micBtn.type = "button";
-    micBtn.title = "Dictée vocale";
+    micBtn.title = "Dictée vocale (une phrase à la fois)";
     micBtn.textContent = "🎤";
-    micBtn.onclick = () => {
-      if (listening) {
-        recognition?.stop();
-        return;
-      }
-      recognition = new Speech();
-      recognition.lang = navigator.language || "fr-FR";
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = (ev) => {
-        let chunk = "";
-        for (let i = ev.resultIndex; i < ev.results.length; i++) {
-          chunk += ev.results[i][0].transcript;
-        }
-        if (chunk) {
-          textarea.value = textarea.value ? `${textarea.value} ${chunk}` : chunk;
-        }
-      };
-      recognition.onend = () => {
-        listening = false;
-        micBtn.classList.remove("active");
-        micBtn.textContent = "🎤";
-      };
-      recognition.start();
-      listening = true;
-      micBtn.classList.add("active");
-      micBtn.textContent = "⏹";
-    };
+    micBtn.disabled = true;
   }
+
+  speech = createSpeechComposer(textarea, micBtn, () => {});
 
   const sendBtn = el("button", "btn primary");
   sendBtn.type = "button";
@@ -396,6 +472,7 @@ function renderSession(cwd) {
 
   const setComposerEnabled = (on) => {
     textarea.disabled = !on;
+    if (micBtn) micBtn.disabled = !on;
     sendBtn.disabled = !on || !textarea.value.trim();
     pasteBtn.disabled = !on || !textarea.value.trim();
   };
@@ -408,7 +485,7 @@ function renderSession(cwd) {
   sendBtn.onclick = () => {
     sendToTerminal(textarea.value.trim(), true);
     textarea.value = "";
-    recognition?.stop();
+    speech?.stop();
     setComposerEnabled(termReady);
   };
 
@@ -433,6 +510,13 @@ function renderSession(cwd) {
     keysBar.appendChild(b);
   }
   root.appendChild(keysBar);
+  if (!showKeys) keysBar.classList.add("hidden");
+
+  toggleComposer.onclick = () => {
+    showComposer = !showComposer;
+    composer.classList.toggle("composer-hidden", !showComposer);
+    toggleComposer.setAttribute("aria-pressed", String(showComposer));
+  };
 
   toggleKeys.onclick = () => {
     showKeys = !showKeys;
@@ -533,6 +617,14 @@ function renderSession(cwd) {
   window.addEventListener("resize", onResize);
   const ro = new ResizeObserver(onResize);
   ro.observe(termHost);
+  detachKeyboard = attachKeyboardAwareSession(root, term, fit, onResize);
+
+  term.textarea?.addEventListener("focus", () => {
+    setTimeout(() => {
+      onResize();
+      term.scrollToBottom();
+    }, 300);
+  });
 }
 
 async function initPick() {

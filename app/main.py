@@ -1,12 +1,15 @@
 from pathlib import Path
+import subprocess
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from app.config import settings, _normalize_root_path
 from app.paths import PathNotAllowedError, assert_path_under_roots, folder_meta, list_subfolders
-from app.terminal import handle_terminal_ws
+from app.terminal import handle_tmux_attach_ws
+from app.tmux_sessions import ensure_session, get_session
 from app.ws_tokens import consume_ws_token, issue_ws_token
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +25,11 @@ def public_base_path(request: Request) -> str:
 
 
 api = FastAPI(title="Claude Web UI")
+
+
+class SessionCreateBody(BaseModel):
+    cwd: str
+    sessionId: str | None = None
 
 
 @api.get("/api/health")
@@ -56,6 +64,31 @@ def ws_token() -> dict:
     return {"token": issue_ws_token()}
 
 
+@api.post("/api/sessions")
+def create_session(body: SessionCreateBody) -> dict:
+    try:
+        safe = assert_path_under_roots(body.cwd)
+    except PathNotAllowedError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    try:
+        session_id, resumed = ensure_session(str(safe), body.sessionId)
+    except (subprocess.CalledProcessError, OSError) as e:
+        raise HTTPException(status_code=500, detail=f"tmux indisponible ou échec session: {e}") from e
+    return {
+        "sessionId": session_id,
+        "cwd": str(safe),
+        "resumed": resumed,
+    }
+
+
+@api.get("/api/sessions/{session_id}")
+def session_status(session_id: str) -> dict:
+    rec = get_session(session_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Session introuvable")
+    return {"sessionId": rec.session_id, "cwd": rec.cwd, "alive": True}
+
+
 @api.get("/api/folder")
 def folder(path: str = Query(...)) -> dict:
     try:
@@ -67,7 +100,7 @@ def folder(path: str = Query(...)) -> dict:
 @api.websocket("/ws/terminal")
 async def ws_terminal(
     websocket: WebSocket,
-    cwd: str = Query(...),
+    sessionId: str = Query(...),
     cols: int = Query(80),
     rows: int = Query(24),
     token: str | None = Query(default=None),
@@ -76,34 +109,23 @@ async def ws_terminal(
         await websocket.close(code=4401, reason="Jeton WS invalide ou expiré")
         return
 
-    await websocket.accept()
-    if not cwd:
-        await websocket.send_json({"type": "error", "message": "cwd manquant"})
-        await websocket.close()
-        return
-    try:
-        safe = assert_path_under_roots(cwd)
-    except PathNotAllowedError as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
-        await websocket.close()
+    rec = get_session(sessionId)
+    if rec is None:
+        await websocket.close(code=4404, reason="Session introuvable")
         return
 
+    await websocket.accept()
     await websocket.send_json(
         {
             "type": "ready",
-            "cwd": str(safe),
+            "cwd": rec.cwd,
+            "sessionId": rec.session_id,
             "command": settings.claude_command,
+            "resumed": True,
         }
     )
     try:
-        await handle_terminal_ws(
-            websocket,
-            str(safe),
-            cols,
-            rows,
-            settings.claude_command,
-            settings.use_login_shell,
-        )
+        await handle_tmux_attach_ws(websocket, sessionId, cols, rows)
     except WebSocketDisconnect:
         pass
 
@@ -116,8 +138,8 @@ if STATIC.is_dir():
         html = INDEX_HTML.read_text(encoding="utf-8")
         base = public_base_path(request)
         base_href = f"{base}/" if base else "/"
-        html = html.replace('%%APP_BASE_HREF%%', base_href)
-        html = html.replace('%%APP_BASE_PATH%%', base)
+        html = html.replace("%%APP_BASE_HREF%%", base_href)
+        html = html.replace("%%APP_BASE_PATH%%", base)
         return HTMLResponse(html)
 
 

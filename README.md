@@ -19,6 +19,7 @@ L'exposition réseau et l'authentification restent **à ta charge** (nginx, Tail
 
 - Python 3.11+
 - Linux sur la VPS (module `pty` stdlib)
+- **`tmux`** installé sur la VPS (sessions persistantes)
 - `claude` dans le `PATH` de l'utilisateur qui lance le service
 
 ## Installation
@@ -47,8 +48,15 @@ Variables lues depuis `.env` (via `python-dotenv` au démarrage).
 | `USE_LOGIN_SHELL` | `true` | Passe par `bash -lc` (`.profile`, nvm, etc.) |
 | `ROOT_PATH` | *(vide)* | Préfixe public (`/claude`) pour API/WS côté navigateur |
 | `MOUNT_AT_ROOT_PATH` | `false` | Monter l'app FastAPI sous `ROOT_PATH` (si nginx ne retire pas le préfixe) |
+| `SESSION_IDLE_TTL` | `86400` | Durée (s) avant destruction d'une session tmux inactive |
 
 Seuls les chemins **sous** `WORKSPACE_ROOTS` sont autorisés.
+
+## Sessions persistantes (tmux)
+
+Chaque projet tourne dans une **session tmux** sur la VPS. Si Safari coupe le WebSocket (arrière-plan, timeout réseau), Claude continue de tourner. Au retour, l'app **reconnecte** automatiquement (`visibilitychange` + retry).
+
+Rouvrir le même dossier reprend la session existante (24 h par défaut). « ← Projets » ne tue pas tmux.
 
 ## nginx (exemple)
 

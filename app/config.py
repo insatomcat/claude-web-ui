@@ -29,6 +29,7 @@ class Settings:
     root_path: str = _normalize_root_path(os.getenv("ROOT_PATH", ""))
     mount_at_root_path: bool = os.getenv("MOUNT_AT_ROOT_PATH", "false").lower() == "true"
     ws_token_ttl: int = int(os.getenv("WS_TOKEN_TTL", "120"))
+    session_idle_ttl: int = int(os.getenv("SESSION_IDLE_TTL", str(24 * 3600)))
     workspace_roots: list[str]
 
     def __init__(self) -> None:

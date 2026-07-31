@@ -4,6 +4,30 @@ import { FitAddon } from "https://esm.sh/@xterm/addon-fit@0.10.0";
 const RECENTS_KEY = "claudewebui-recents";
 const MAX_RECENTS = 12;
 
+function sessionStorageKey(cwd) {
+  return `claudewebui-session-${cwd}`;
+}
+
+async function ensureServerSession(cwd) {
+  const stored = sessionStorage.getItem(sessionStorageKey(cwd));
+  const r = await fetch(appUrl("api/sessions"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ cwd, sessionId: stored || null }),
+  });
+  if (!r.ok) throw new Error("session");
+  const data = await r.json();
+  sessionStorage.setItem(sessionStorageKey(cwd), data.sessionId);
+  return data;
+}
+
+async function fetchWsToken() {
+  const r = await fetch(appUrl("api/ws-token"), { credentials: "same-origin" });
+  if (!r.ok) throw new Error("token");
+  return r.json();
+}
+
 const MOBILE_KEYS = [
   { label: "Tab", seq: "\t" },
   { label: "Esc", seq: "\x1b" },
@@ -403,16 +427,19 @@ async function renderSession(cwd) {
   /** @type {{ stop: () => void } | null} */
   let speech = null;
   let detachKeyboard = () => {};
+  /** @type {WebSocket | null} */
+  let ws = null;
+  let intentionalLeave = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
+  /** @type {(() => void) | null} */
+  let onVisible = null;
 
   const topbar = el("header", "topbar");
   const back = el("button", "btn ghost");
   back.type = "button";
   back.textContent = "← Projets";
-  back.onclick = () => {
-    detachKeyboard();
-    speech?.stop();
-    initPick();
-  };
 
   const title = el("div", "topbar-title");
   title.title = cwd;
@@ -550,29 +577,22 @@ async function renderSession(cwd) {
     viewport.style.overflowY = "scroll";
   }
 
-  let token;
+  let sessionId;
   try {
-    const tokenRes = await fetch(appUrl("api/ws-token"), { credentials: "same-origin" });
-    if (!tokenRes.ok) throw new Error("token");
-    ({ token } = await tokenRes.json());
+    const session = await ensureServerSession(cwd);
+    sessionId = session.sessionId;
+    if (session.resumed) {
+      overlay.textContent = "Reprise de la session Claude…";
+    }
   } catch {
     overlay.classList.remove("hidden");
     overlay.classList.add("error");
-    overlay.textContent = "Impossible d'obtenir un jeton de session (auth nginx ?)";
+    overlay.textContent = "Impossible de créer la session tmux";
     return;
   }
 
-  const ws = new WebSocket(
-    wsTerminalUrl({
-      cwd,
-      cols: term.cols,
-      rows: term.rows,
-      token,
-    }),
-  );
-
   const send = (data) => {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "input", data }));
     }
   };
@@ -596,44 +616,113 @@ async function renderSession(cwd) {
   };
   term.onData(send);
 
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === "output") term.write(msg.data);
-    if (msg.type === "ready") {
-      overlay.classList.add("hidden");
-      termReady = true;
-      setComposerEnabled(true);
+  async function connectWs(clearScreen = false) {
+    if (
+      ws &&
+      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
     }
-    if (msg.type === "error") {
+
+    overlay.classList.remove("error");
+    overlay.classList.remove("hidden");
+    overlay.textContent =
+      reconnectAttempt > 0 ? "Reconnexion à Claude…" : "Connexion à Claude…";
+
+    let token;
+    try {
+      ({ token } = await fetchWsToken());
+    } catch {
+      overlay.classList.add("error");
+      overlay.textContent = "Impossible d'obtenir un jeton (auth nginx ?)";
+      scheduleReconnect();
+      return;
+    }
+
+    if (clearScreen) term.clear();
+    fit.fit();
+
+    ws = new WebSocket(
+      wsTerminalUrl({
+        sessionId,
+        cols: term.cols,
+        rows: term.rows,
+        token,
+      }),
+    );
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "output") term.write(msg.data);
+      if (msg.type === "ready") {
+        overlay.classList.add("hidden");
+        termReady = true;
+        reconnectAttempt = 0;
+        setComposerEnabled(true);
+        onResize();
+      }
+      if (msg.type === "error") {
+        overlay.classList.remove("hidden");
+        overlay.classList.add("error");
+        overlay.textContent = msg.message || "Erreur";
+      }
+      if (msg.type === "detached") {
+        termReady = false;
+        setComposerEnabled(false);
+      }
+    };
+
+    ws.onerror = () => {
+      if (intentionalLeave) return;
       overlay.classList.remove("hidden");
       overlay.classList.add("error");
-      overlay.textContent = msg.message || "Erreur";
-    }
-    if (msg.type === "exit") {
+      overlay.textContent = "WebSocket interrompu";
+    };
+
+    ws.onclose = () => {
       termReady = false;
       setComposerEnabled(false);
+      if (intentionalLeave) return;
+      overlay.classList.remove("hidden");
+      overlay.classList.remove("error");
+      overlay.textContent = "Session en pause, reconnexion…";
+      scheduleReconnect();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (intentionalLeave) return;
+    clearTimeout(reconnectTimer);
+    const delay = Math.min(800 * 2 ** reconnectAttempt, 15000);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(() => void connectWs(true), delay);
+  }
+
+  onVisible = () => {
+    if (document.visibilityState === "visible" && !intentionalLeave) {
+      reconnectAttempt = 0;
+      void connectWs(true);
     }
   };
+  document.addEventListener("visibilitychange", onVisible);
+  window.addEventListener("pageshow", onVisible);
 
-  ws.onerror = () => {
-    overlay.classList.remove("hidden");
-    overlay.classList.add("error");
-    overlay.textContent = "Connexion WebSocket impossible (nginx /claude/ws/ ?)";
-  };
-
-  ws.onclose = (ev) => {
-    if (termReady) return;
-    overlay.classList.remove("hidden");
-    overlay.classList.add("error");
-    overlay.textContent =
-      ev.code === 4401
-        ? "Jeton WebSocket refusé ou expiré. Recharge la page."
-        : "WebSocket fermé (vérifie nginx location /claude/ws/)";
+  back.onclick = () => {
+    intentionalLeave = true;
+    clearTimeout(reconnectTimer);
+    if (onVisible) {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    }
+    ws?.close();
+    detachKeyboard();
+    speech?.stop();
+    initPick();
   };
 
   const onResize = () => {
     fit.fit();
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     }
   };
@@ -648,6 +737,8 @@ async function renderSession(cwd) {
       term.scrollToBottom();
     }, 300);
   });
+
+  await connectWs(false);
 }
 
 async function initPick() {

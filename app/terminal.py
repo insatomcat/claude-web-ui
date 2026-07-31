@@ -7,9 +7,10 @@ import signal
 import struct
 import subprocess
 import termios
-from shlex import quote
 
 from fastapi import WebSocket
+
+from app.tmux_sessions import get_session, tmux_resize, touch_session
 
 
 def _set_winsize(fd: int, row: int, col: int) -> None:
@@ -17,34 +18,29 @@ def _set_winsize(fd: int, row: int, col: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
 
 
-def _shell_command(cwd: str, claude_command: str, use_login_shell: bool) -> list[str]:
-    shell = os.environ.get("SHELL", "/bin/bash")
-    if use_login_shell:
-        script = f"cd {quote(cwd)} && exec {claude_command}"
-        return [shell, "-lc", script]
-    return [shell, "-lc", claude_command]
-
-
-async def handle_terminal_ws(
+async def handle_tmux_attach_ws(
     websocket: WebSocket,
-    cwd: str,
+    session_id: str,
     cols: int,
     rows: int,
-    claude_command: str,
-    use_login_shell: bool,
 ) -> None:
-    master_fd, slave_fd = pty.openpty()
+    rec = get_session(session_id)
+    if rec is None:
+        await websocket.send_json({"type": "error", "message": "Session introuvable ou expirée"})
+        return
+
     row = max(rows, 3)
     col = max(cols, 10)
+    tmux_resize(session_id, col, row)
+
+    master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, row, col)
 
-    cmd = _shell_command(cwd, claude_command, use_login_shell)
     proc = subprocess.Popen(
-        cmd,
+        ["tmux", "attach-session", "-t", rec.tmux_name],
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
-        cwd=cwd,
         close_fds=True,
         start_new_session=True,
         env=os.environ.copy(),
@@ -67,7 +63,10 @@ async def handle_terminal_ws(
     reader = asyncio.create_task(read_pty())
 
     def _resize(c: int, r: int) -> None:
-        _set_winsize(master_fd, max(r, 3), max(c, 10))
+        c = max(c, 10)
+        r = max(r, 3)
+        _set_winsize(master_fd, r, c)
+        tmux_resize(session_id, c, r)
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGWINCH)
         except (ProcessLookupError, OSError):
@@ -85,9 +84,7 @@ async def handle_terminal_ws(
             if msg_type == "input" and isinstance(msg.get("data"), str):
                 os.write(master_fd, msg["data"].encode("utf-8"))
             elif msg_type == "resize":
-                c = int(msg.get("cols") or col)
-                r = int(msg.get("rows") or row)
-                _resize(c, r)
+                _resize(int(msg.get("cols") or col), int(msg.get("rows") or row))
     except asyncio.CancelledError:
         raise
     finally:
@@ -105,7 +102,8 @@ async def handle_terminal_ws(
             os.close(master_fd)
         except OSError:
             pass
+        touch_session(session_id)
         try:
-            await websocket.send_json({"type": "exit"})
+            await websocket.send_json({"type": "detached"})
         except Exception:
             pass

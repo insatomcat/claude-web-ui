@@ -618,7 +618,17 @@ async function renderSession(cwd) {
   ws.onerror = () => {
     overlay.classList.remove("hidden");
     overlay.classList.add("error");
-    overlay.textContent = "Connexion WebSocket impossible";
+    overlay.textContent = "Connexion WebSocket impossible (nginx /claude/ws/ ?)";
+  };
+
+  ws.onclose = (ev) => {
+    if (termReady) return;
+    overlay.classList.remove("hidden");
+    overlay.classList.add("error");
+    overlay.textContent =
+      ev.code === 4401
+        ? "Jeton WebSocket refusé ou expiré. Recharge la page."
+        : "WebSocket fermé (vérifie nginx location /claude/ws/)";
   };
 
   const onResize = () => {

@@ -56,7 +56,13 @@ Seuls les chemins **sous** `WORKSPACE_ROOTS` sont autorisés.
 
 Chaque projet tourne dans une **session tmux** sur la VPS. Si Safari coupe le WebSocket (arrière-plan, timeout réseau), Claude continue de tourner. Au retour, l'app **reconnecte** automatiquement (`visibilitychange` + retry).
 
-Rouvrir le même dossier reprend la session existante (24 h par défaut). « ← Projets » ne tue pas tmux.
+Rouvrir le même dossier reprend la session existante (24 h par défaut).
+
+- **← Projets** : se déconnecte de l'interface, la session tmux **continue** sur la VPS (reprise au prochain ouverture).
+- **Terminer** : tue la session tmux et arrête Claude sur le serveur.
+- **`exit` dans Claude** : ferme aussi la session (Claude est lancé avec `exec`, tmux `exit-empty on`).
+
+Pour nettoyer une ancienne session bloquée en bash : **Terminer**, ou `tmux kill-session -t cw-…` sur la VPS.
 
 ## nginx (exemple)
 

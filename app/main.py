@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from app.config import settings, _normalize_root_path
 from app.paths import PathNotAllowedError, assert_path_under_roots, folder_meta, list_subfolders
 from app.terminal import handle_tmux_attach_ws
-from app.tmux_sessions import ensure_session, get_session
+from app.tmux_sessions import destroy_session, ensure_session, get_session
 from app.ws_tokens import consume_ws_token, issue_ws_token
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -87,6 +87,13 @@ def session_status(session_id: str) -> dict:
     if rec is None:
         raise HTTPException(status_code=404, detail="Session introuvable")
     return {"sessionId": rec.session_id, "cwd": rec.cwd, "alive": True}
+
+
+@api.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> dict:
+    if destroy_session(session_id):
+        return {"ok": True}
+    raise HTTPException(status_code=404, detail="Session introuvable")
 
 
 @api.get("/api/folder")

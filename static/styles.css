@@ -186,6 +186,14 @@ body {
   border-color: transparent;
 }
 
+.btn.danger {
+  color: #f85149;
+}
+
+.btn.danger:hover {
+  background: rgba(218, 54, 51, 0.15);
+}
+
 .btn.block {
   width: 100%;
   margin-top: 0.75rem;

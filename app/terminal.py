@@ -10,7 +10,15 @@ import termios
 
 from fastapi import WebSocket
 
-from app.tmux_sessions import get_session, tmux_resize, touch_session
+from app.tmux_sessions import (
+    _terminal_env,
+    claude_start_input,
+    get_session,
+    mark_claude_started,
+    should_start_claude,
+    tmux_resize,
+    touch_session,
+)
 
 
 def _set_winsize(fd: int, row: int, col: int) -> None:
@@ -43,9 +51,11 @@ async def handle_tmux_attach_ws(
         stderr=slave_fd,
         close_fds=True,
         start_new_session=True,
-        env=os.environ.copy(),
+        env=_terminal_env(),
     )
     os.close(slave_fd)
+
+    start_claude = should_start_claude(session_id)
 
     stop = asyncio.Event()
 
@@ -61,6 +71,14 @@ async def handle_tmux_attach_ws(
             await websocket.send_json({"type": "output", "data": text})
 
     reader = asyncio.create_task(read_pty())
+
+    if start_claude:
+        await asyncio.sleep(0.4)
+        try:
+            os.write(master_fd, claude_start_input().encode("utf-8"))
+            mark_claude_started(session_id)
+        except OSError:
+            pass
 
     def _resize(c: int, r: int) -> None:
         c = max(c, 10)

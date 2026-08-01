@@ -22,6 +22,14 @@ async function ensureServerSession(cwd) {
   return data;
 }
 
+async function destroyServerSession(cwd, sessionId) {
+  await fetch(appUrl(`api/sessions/${encodeURIComponent(sessionId)}`), {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  sessionStorage.removeItem(sessionStorageKey(cwd));
+}
+
 async function fetchWsToken() {
   const r = await fetch(appUrl("api/ws-token"), { credentials: "same-origin" });
   if (!r.ok) throw new Error("token");
@@ -454,7 +462,12 @@ async function renderSession(cwd) {
   toggleKeys.type = "button";
   toggleKeys.textContent = "Clavier";
 
-  topbar.append(back, title, toggleComposer, toggleKeys);
+  const endBtn = el("button", "btn ghost danger");
+  endBtn.type = "button";
+  endBtn.textContent = "Terminer";
+  endBtn.title = "Arrêter Claude et fermer la session tmux sur le serveur";
+
+  topbar.append(back, title, endBtn, toggleComposer, toggleKeys);
   root.appendChild(topbar);
 
   const termWrap = el("div", "terminal-wrap");
@@ -639,7 +652,7 @@ async function renderSession(cwd) {
       return;
     }
 
-    if (clearScreen) term.clear();
+    if (clearScreen) term.reset();
     fit.fit();
 
     ws = new WebSocket(
@@ -707,19 +720,6 @@ async function renderSession(cwd) {
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("pageshow", onVisible);
 
-  back.onclick = () => {
-    intentionalLeave = true;
-    clearTimeout(reconnectTimer);
-    if (onVisible) {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("pageshow", onVisible);
-    }
-    ws?.close();
-    detachKeyboard();
-    speech?.stop();
-    initPick();
-  };
-
   const onResize = () => {
     fit.fit();
     if (ws?.readyState === WebSocket.OPEN) {
@@ -730,6 +730,41 @@ async function renderSession(cwd) {
   const ro = new ResizeObserver(onResize);
   ro.observe(termHost);
   detachKeyboard = attachKeyboardAwareSession(root, term, fit, onResize);
+
+  function leaveSession() {
+    intentionalLeave = true;
+    clearTimeout(reconnectTimer);
+    if (onVisible) {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    }
+    ws?.close();
+    detachKeyboard();
+    speech?.stop();
+    window.removeEventListener("resize", onResize);
+    ro.disconnect();
+    initPick();
+  }
+
+  back.onclick = () => leaveSession();
+
+  endBtn.onclick = async () => {
+    if (
+      !confirm(
+        "Terminer la session ? Claude sera arrêté sur le serveur. Rouvrir le projet créera une nouvelle session.",
+      )
+    ) {
+      return;
+    }
+    intentionalLeave = true;
+    clearTimeout(reconnectTimer);
+    try {
+      await destroyServerSession(cwd, sessionId);
+    } catch {
+      /* retour liste même si DELETE échoue */
+    }
+    leaveSession();
+  };
 
   term.textarea?.addEventListener("focus", () => {
     setTimeout(() => {
